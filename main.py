@@ -5,16 +5,21 @@ import sqlite3
 import numpy as np
 import tkinter as tk
 from tkinter import simpledialog, messagebox
-from PIL import Image, ImageTk
-
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 # Функция для получения пути к классификатору
 CASCADE_SCALE = 1.2
 CASCADE_MIN_NEIGHBORS = 5
 CASCADE_MIN_SIZE = (40, 40)
 DETECTION_INTERVAL = 3  # Детектируем не на каждом кадре, чтобы ускорить работу
-RECOGNITION_THRESHOLD = 0.45
+RECOGNITION_THRESHOLD = 0.40
 FACE_VECTOR_SIZE = (64, 64)
 
+RTK_BG = "#1A0F3D"
+RTK_CARD = "#2A1B59"
+RTK_ACCENT = "#7A2BF0"
+RTK_ACCENT_2 = "#F16822"
+RTK_TEXT = "#F5F2FF"
+RTK_MUTED = "#CFC7F5"
 
 def get_classifier_path():
     """Возвращает путь к Haar-каскаду для обычного запуска и PyInstaller."""
@@ -50,8 +55,6 @@ def create_table():
 def add_face_to_db(name, encoding):
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO faces (name, encoding) VALUES (?, ?)', 
-                   (name, encoding.tobytes()))
     cursor.execute(
         "INSERT INTO faces (name, encoding) VALUES (?, ?)",
         (name, encoding.astype(np.float32).tobytes()),
@@ -110,13 +113,13 @@ def match_face(encoding, known_encodings, known_names):
         return "Unknown", None
 
     candidates = np.vstack(known_encodings)
-    distances = np.linalg.norm(candidates - encoding, axis=1)
-    best_idx = int(np.argmin(distances))
-    best_distance = float(distances[best_idx])
+    similarities = candidates @ encoding
+    best_idx = int(np.argmax(similarities))
+    best_similarity = float(similarities[best_idx])
 
-    if best_distance <= RECOGNITION_THRESHOLD:
-        return known_names[best_idx], best_distance
-    return "Unknown", best_distance
+    if best_similarity >= RECOGNITION_THRESHOLD:
+        return known_names[best_idx], best_similarity
+    return "Unknown", best_similarity
 
 
 # Инициализация камеры
@@ -140,17 +143,75 @@ known_face_encodings, known_face_names = load_known_faces()
 # UI
 root = tk.Tk()
 root.title("Распознавание лиц для пропускной системы")
+root.configure(bg=RTK_BG)
 
-window_width, window_height = 640, 480
+window_width, window_height = 760, 700
 root.geometry(f"{window_width}x{window_height}")
 
+def build_rostelecom_logo():
+    """Загружает логотип из папки с main.py; если файла нет — рисует компактный fallback."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    logo_candidates = [
+        "rostelecom_logo.png"
+    ]
+
+    for name in logo_candidates:
+        logo_path = os.path.join(base_dir, name)
+        if os.path.exists(logo_path):
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((170, 42), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (170, 42), (0, 0, 0, 0))
+            x = (170 - logo.width) // 2
+            y = (42 - logo.height) // 2
+            canvas.paste(logo, (x, y), logo)
+            return ImageTk.PhotoImage(canvas)
+
+    logo = Image.new("RGBA", (170, 42), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(logo)
+    draw.polygon([(6, 32), (20, 8), (34, 32)], fill=RTK_ACCENT)
+    draw.polygon([(28, 32), (42, 8), (56, 32)], fill=RTK_ACCENT_2)
+
+    try:
+        font = ImageFont.truetype("arial.ttf", 15)
+    except OSError:
+        font = ImageFont.load_default()
+    draw.text((66, 11), "Ростелеком", fill=RTK_MUTED, font=font)
+    return ImageTk.PhotoImage(logo)
+
+header = tk.Frame(root, bg=RTK_BG)
+header.pack(fill="x", padx=18, pady=(14, 6))
+
+title_label = tk.Label(
+    header,
+    text="Пропускная система",
+    bg=RTK_BG,
+    fg=RTK_TEXT,
+    font=("Arial", 20, "bold"),
+)
+title_label.pack(side="left")
+
+logo_tk = build_rostelecom_logo()
+logo_label = tk.Label(header, image=logo_tk, bg=RTK_BG, bd=0)
+logo_label.image = logo_tk
+logo_label.pack(side="right")
+
+video_card = tk.Frame(root, bg=RTK_CARD, bd=0, highlightthickness=2, highlightbackground=RTK_ACCENT)
+video_card.pack(fill="both", expand=True, padx=18, pady=10)
+
+
 # Виджет для отображения видео
-label = tk.Label(root)
-label.pack()
+label = tk.Label(video_card, bg=RTK_CARD)
+label.pack(fill="both", expand=True, padx=10, pady=10)
 
 # Статусная метка
-status_label = tk.Label(root, text="Ожидание для распознавания...", font=("Arial", 14))
-status_label.pack()
+status_label = tk.Label(
+    root,
+    text="Ожидание для распознавания...",
+    font=("Arial", 13),
+    fg=RTK_MUTED,
+    bg=RTK_BG,
+)
+status_label.pack(pady=(0, 10))
 
 # Состояние
 last_faces = []
@@ -162,7 +223,7 @@ def capture_face():
 
     ret, frame = video_capture.read()
     if not ret:
-        status_label.config(text="Ошибка: Не удалось получить кадр.")
+        status_label.config(text="Ошибка: Не удалось получить кадр.", fg=RTK_ACCENT_2)
         return
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -175,26 +236,26 @@ def capture_face():
     )
 
     if len(faces) == 0:
-        status_label.config(text="Ошибка: Лицо не обнаружено.")
+        status_label.config(text="Ошибка: Лицо не обнаружено.", fg=RTK_ACCENT_2)
         return
 
     # Берём самое крупное лицо как главное
     box = max(faces, key=lambda f: f[2] * f[3])
     encoding = extract_face_encoding(gray, box)
     if encoding is None:
-        status_label.config(text="Ошибка: Не удалось построить дескриптор лица.")
+        status_label.config(text="Ошибка: Не удалось построить дескриптор лица.", fg=RTK_ACCENT_2)
         return
 
     name = simpledialog.askstring("Ввод данных", "Введите фамилию, имя и отчество нового работника:")
     if not name:
-        status_label.config(text="Ошибка: Имя не введено.")
+        status_label.config(text="Ошибка: Имя не введено.", fg=RTK_ACCENT_2)
         return
 
     add_face_to_db(name, encoding)
     known_face_encodings, known_face_names = load_known_faces()
     messagebox.showinfo("Успех", f"Лицо {name} добавлено в базу данных!")
-    status_label.config(text="Лицо добавлено. Распознавание активно.")
-    
+    status_label.config(text="Лицо добавлено. Распознавание активно.", fg=RTK_MUTED)
+
 def process_frame():
     """Единый цикл: захват, детекция, распознавание, отрисовка."""
     global frame_counter, last_faces
@@ -225,12 +286,14 @@ def process_frame():
     frame_counter += 1
 
     for (x, y, w, h), name, score in last_faces:
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        is_match = (score is not None) and (score > RECOGNITION_THRESHOLD) and (name != "Unknown")
+        box_color = (0, 190, 0) if is_match else (242, 104, 34)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 2)
         title = name if score is None else f"{name} ({score:.2f})"
         cv2.putText(frame, title, (x + 6, y + h - 8), cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(rgb_frame).resize((window_width, window_height))
+    img = Image.fromarray(rgb_frame).resize((window_width - 56, window_height - 240))
     img_tk = ImageTk.PhotoImage(img)
 
     label.img_tk = img_tk
@@ -239,8 +302,21 @@ def process_frame():
     label.after(15, process_frame)
 
 
-new_pass_button = tk.Button(root, text="Сфотографировать и добавить", command=capture_face, font=("Arial", 14))
-new_pass_button.pack()
+new_pass_button = tk.Button(
+    root,
+    text="Сфотографировать и добавить",
+    command=capture_face,
+    font=("Arial", 13, "bold"),
+    bg=RTK_ACCENT,
+    fg="white",
+    activebackground=RTK_ACCENT_2,
+    activeforeground="white",
+    bd=0,
+    padx=18,
+    pady=10,
+    cursor="hand2",
+)
+new_pass_button.pack(pady=(2, 18))
 
 process_frame()
 
