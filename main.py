@@ -20,6 +20,26 @@ RTK_ACCENT = "#7A2BF0"
 RTK_ACCENT_2 = "#F16822"
 RTK_TEXT = "#F5F2FF"
 RTK_MUTED = "#CFC7F5"
+NAME_FONT_SIZE = 20
+
+
+def load_cyrillic_font(size):
+    """Возвращает шрифт с поддержкой кириллицы для подписи имён."""
+    font_candidates = [
+        "arial.ttf",
+        "Arial.ttf",
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ]
+
+    for font_path in font_candidates:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 def get_classifier_path():
     """Возвращает путь к Haar-каскаду для обычного запуска и PyInstaller."""
@@ -147,6 +167,7 @@ root.configure(bg=RTK_BG)
 
 window_width, window_height = 760, 700
 root.geometry(f"{window_width}x{window_height}")
+name_font = load_cyrillic_font(NAME_FONT_SIZE)
 
 def build_rostelecom_logo():
     """Загружает логотип из папки с main.py; если файла нет — рисует компактный fallback."""
@@ -289,11 +310,18 @@ def process_frame():
         is_match = (score is not None) and (score > RECOGNITION_THRESHOLD) and (name != "Unknown")
         box_color = (0, 190, 0) if is_match else (242, 104, 34)
         cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 2)
-        title = name if score is None else f"{name} ({score:.2f})"
-        cv2.putText(frame, title, (x + 6, y + h - 8), cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1)
 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(rgb_frame).resize((window_width - 56, window_height - 240))
+    display_img = Image.fromarray(rgb_frame)
+    draw = ImageDraw.Draw(display_img)
+
+    for (x, y, w, h), name, score in last_faces:
+        title = name if score is None else f"{name} ({score:.2f})"
+        text_x = x + 6
+        text_y = max(6, y - NAME_FONT_SIZE - 8)
+        draw.text((text_x, text_y), title, fill=(255, 255, 255), font=name_font)
+
+    img = display_img.resize((window_width - 56, window_height - 240))
     img_tk = ImageTk.PhotoImage(img)
 
     label.img_tk = img_tk

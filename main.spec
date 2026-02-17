@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('haarcascade_frontalface_default.xml', '.')],
+    datas=[('haarcascade_frontalface_default.xml', '.'), ('rostelecom_logo.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
