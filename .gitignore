@@ -1,0 +1,5 @@
+/build
+.venv
+/.venv
+/.idea
+haarcascade_frontalface_default.xml
